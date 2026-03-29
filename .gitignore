@@ -86,8 +86,16 @@ desktop.ini
 *.dylib
 *.pyd
 
+# Git data (CRITICAL for ClawHub upload)
+.git/
+.gitignore
+.gitattributes
+
 # Jupyter Notebook
 .ipynb_checkpoints/
+
+# ClawHub / OpenClaw
+SKILL.md
 
 # Ruff / Black / isort
 .ruff_cache/
