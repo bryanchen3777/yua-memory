@@ -1,0 +1,38 @@
+# Yua Memory System Configuration
+# Copy this to config.yaml and customize
+
+maintenance:
+  daily_time: "02:00"       # Daily cleanup run time (24h format)
+  weekly_day: "sunday"       # Day for weekly deep clean
+  weekly_time: "03:00"       # Weekly task run time
+  monthly_time: "04:00"      # Monthly archive cleanup time
+  retry_max_attempts: 3      # Number of retry attempts on failure
+  retry_base_delay: 60       # Base delay between retries (seconds)
+
+aging:
+  dry_run: false             # Set true to preview deletions without executing
+  functional_ttl_days: 180    # TTL for functional data (itinerary, schedule, etc.)
+  general_ttl_days: 365      # TTL for general memories
+
+sync:
+  auto_fix: true             # Automatically fix sync issues (orphan indexing)
+
+consolidation:
+  similarity_threshold: 0.75  # Threshold for detecting similar memories (0.0-1.0)
+
+archive:
+  retention_days: 90         # Days to retain archives before cleanup
+
+notifications:
+  enabled: false             # Enable/disable notifications
+  provider: "telegram"       # Notification provider (currently only telegram)
+  telegram:
+    token: "YOUR_BOT_TOKEN_HERE"   # Telegram bot token from @BotFather
+    chat_id: "YOUR_CHAT_ID_HERE"   # Telegram chat ID (group or personal)
+    notify_on_success: true         # Send notification on task success
+    notify_on_failure: true         # Send notification on task failure
+
+# Note: For production, use environment variables for sensitive data:
+#   - OPENCLAW_WORKSPACE: Path to workspace directory
+#   - TELEGRAM_BOT_TOKEN: Telegram bot token
+#   - TELEGRAM_CHAT_ID: Telegram chat ID

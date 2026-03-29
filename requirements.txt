@@ -1,0 +1,10 @@
+# Core dependencies
+numpy>=1.21.0
+scikit-learn>=1.0.0
+pyyaml>=6.0
+
+# Optional: For enhanced notifications
+requests>=2.28.0
+
+# Optional: For schedule (scheduler.py)
+schedule>=1.1.0
