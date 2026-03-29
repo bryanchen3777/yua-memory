@@ -1,5 +1,9 @@
 # Yua Memory System: Giving AI a Heartbeat
 
+[![Python CI](https://github.com/bryanchen3777/yua-memory/actions/workflows/python-app.yml/badge.svg)](https://github.com/bryanchen3777/yua-memory/actions/workflows/python-app.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+
 Yua 記憶系統：為 AI 注入心跳
 
 Yua Memory System is a sophisticated emotional-aware memory management system designed for AI companions. Unlike traditional RAG, Yua doesn't just store data—she builds a "Kizuna" (bond) by prioritizing what truly matters.
@@ -88,7 +92,7 @@ Final = total_score × Priority_Weight × Category_Weight × ERS_Boost
 ### Installation / 安裝
 
 ```bash
-git clone https://github.com/yua-system/yua-memory.git
+git clone https://github.com/bryanchen3777/yua-memory.git
 cd yua-memory
 pip install -r requirements.txt
 ```
