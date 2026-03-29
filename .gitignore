@@ -2,37 +2,94 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
+*.pyo
 
 # Distribution / packaging
 dist/
 build/
 *.egg-info/
+*.egg
 
 # Virtual environments
 venv/
 env/
 .venv/
+.env/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.swn
+.vs/
 
 # OS
 .DS_Store
 Thumbs.db
+ehthumbs.db
 
-# Local configuration (use config.yaml.example)
-config.yaml
+# Testing
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.hypothesis/
+.tox/
 
 # Logs
-*.log
 logs/
+*.log
 
-# Database files (generated at runtime)
+# Database files (runtime generated)
 *.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
 
-# Environment variables
+# Local state & memory files (private data)
+memory/
+qmd/
+soul_state.json
+sync_state.json
+heartbeat-state.json
+memory_conflicts.json
+
+# Environment & secrets (use config.yaml.example)
 .env
 .env.local
+.env.*.local
+config.yaml
+*.local.yaml
+
+# OpenClaw workspace (local development)
+.openclaw/
+workspace/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+~*
+
+# OS-specific
+*.lnk
+desktop.ini
+
+# Compiled libraries
+*.so
+*.dll
+*.dylib
+*.pyd
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Ruff / Black / isort
+.ruff_cache/
+.ruff/
+.pycproject/
