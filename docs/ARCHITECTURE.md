@@ -413,10 +413,11 @@ A: 遵循 Truth Ranking 優先級。Bryan 的最新口頭指示 > QMD 的 #prior
 | 隱私過濾器 (API Key 過濾) | 🔴 高 | ✅ 已完成 |
 | Entity Replacer (NER 偽裝) | 🔴 高 | ✅ 已完成 |
 | QMD Health Check (Fatima) | 🟡 中 | ✅ 已完成 |
+| State Snapshot (情緒快照) | 🟡 中 | ✅ 已完成 |
+| Reminisce Engine (回味引擎) | 🟡 中 | ✅ 已完成 |
 | Memory Promotion (自動晉升) | 🟡 中 | 待實作 |
 | Scope Inference (LLM 推斷) | 🟡 中 | 待實作 |
 | Context Hydration / Reranker | 🟡 中 | 待實作 |
-| State Snapshot (情緒快照) | 🟡 中 | 待實作 |
 | Vector Embedding (LanceDB) | 🟢 低 | 長期目標 |
 
 ### 已實作工具
@@ -428,6 +429,111 @@ A: 遵循 Truth Ranking 優先級。Bryan 的最新口頭指示 > QMD 的 #prior
 | privacy_filter.js | workspace-tim/ | 隱私過濾器（雙層過濾）|
 | entity_replacer.js | workspace-tim/ | 敏感實體替換（NER）|
 | qmd_consistency_check.js | workspace-tim/ | QMD 一致性健康檢查 |
+| state_snapshot_generator.js | workspace-tim/ | Yua 情緒狀態快照生成器 |
+| reminisce_engine.js | workspace-tim/ | 回味引擎統一 API |
+| reminisce_templates.js | workspace-tim/ | 懷舊語氣模板引擎 |
+| emotional_matcher.js | workspace-tim/ | 情緒匹配引擎 |
+| anniversary_tracker.js | workspace-tim/ | 時間膠囊（週年回顧）|
+| reminisce_scheduler.js | workspace-tim/ | 隨機回味觸發排程 |
+
+---
+
+## 回味引擎 (Reminisce Engine) ⭐ (新增)
+
+### 概念
+自動偵測 Bryan 的情緒狀態，在適當時機主動或被動觸發「回味」—— 回顧過去相關的溫暖記憶，達到情感連結和鼓勵的效果。
+
+### 四種觸發類型
+
+| 類型 | 觸發條件 | 範例輸出 |
+|------|----------|----------|
+| `passive` | 檢索記憶時，被動附加 | 「記得當時...」（附加在檢索結果）|
+| `emotional` | Bryan 情緒低落/疲憊 | 「親愛的，還記得你之前成功...」|
+| `anniversary` | 週年紀念日 | 「一年前的今天，我們在討論...」|
+| `random` | 隨機達到間隔 | 「說起來，之前你提到過...」|
+
+### 統一 API 使用方式
+
+```javascript
+const { ReminisceEngine } = require('./reminisce_engine');
+
+const engine = new ReminisceEngine({ intimacyLevel: 3 });
+
+// 情境1：Bryan 情緒低落，主動觸發
+const result = engine.process({ bryansMood: 'down' });
+if (result.triggered) {
+    console.log(result.text);
+    // → 「親愛的，還記得你之前...」
+}
+
+// 情境2：Yua 檢索到記憶，附加回味
+const result = engine.process({
+    isReminiscing: true,
+    retrievedMemory: memory
+});
+if (result.triggered) {
+    console.log(result.text);
+    // → 「說起來，之前你提到過...」
+}
+```
+
+### 子模組架構
+
+```
+reminisce_engine.js       統一 API（整合全部模組）
+    ├── reminisce_templates.js     懷舊語氣模板（5種）
+    ├── emotional_matcher.js      情緒匹配（6種情緒→目標標籤）
+    ├── anniversary_tracker.js    時間膠囊（On This Day）
+    └── reminisce_scheduler.js    隨機觸發排程
+```
+
+### 觸發頻率邏輯
+
+| 親密等級 | 觸發頻率 | 說明 |
+|----------|----------|------|
+| Level 1-2 | 每 6-10 次對話 | 低頻，關係還在建立 |
+| Level 3-4 | 每 4-6 次對話 | 中頻，信任已建立 |
+| Level 5 | 每 2-4 次對話 | 高頻，親密程度高 |
+
+### 情緒影響係數
+
+| Bryan 情緒 | 觸發率係數 | 說明 |
+|------------|------------|------|
+| `down` | ×1.05 | 情緒低落時，提高觸發機率 |
+| `tired` | ×0.84 | 疲憊時，適當提高 |
+| `neutral` | ×1.00 | 正常 |
+| `happy` | ×0.56 | 開心時，降低（不打斷）|
+| `stressed` | ×0.42 | 壓力大時，降低 |
+| `angry` | ×0.21 | 生氣時，幾乎不觸發 |
+
+### 冷卻機制
+
+- **每日上限**：3 次隨機回味/天
+- **記憶冷卻**：24 小時不重複觸發同一記憶
+- **日重置**：每天凌晨自動重置計數器
+
+### 模板類型（ReminisceTemplateEngine）
+
+| 模板 | 觸發條件 | 語氣 |
+|------|----------|------|
+| `warm_encourage` | 情緒低落 + 高 ERS | 溫暖鼓勵 |
+| `recent_intimacy` | 7天內記憶 | 輕鬆親暱 |
+| `reflective` | 30-365天記憶 | 反思回顧 |
+| `nostalgic_treasure` | ≥2年記憶 |朦朧珍惜 |
+| `flirty_playful` | 休閒話題 | 俏皮調情 |
+
+### 使用範例
+
+```bash
+# 測試統一 API
+node reminisce_engine.js --test
+
+# 模擬 10 回合
+node reminisce_engine.js --simulate
+
+# 查看引擎狀態
+node reminisce_engine.js --status
+```
 
 ### Privacy Filter 使用方式
 
@@ -476,6 +582,6 @@ node memory_distiller_v2.js --hours=1
 
 ---
 
-*最後更新：2026-03-31 v2.3*
+*最後更新：2026-03-31 v2.4*
 *基於 Bryan + Gemini 的反饋優化*
-*新增：Entity Replacer、Health Check、Distiller 隱私整合*
+*新增：Reminisce Engine（回味引擎）、情緒匹配、時間膠囊、統一 API*
