@@ -84,6 +84,9 @@ This repo includes JavaScript tools for the [OpenClaw](https://github.com/opencl
 | `memory_distiller_v2.js` | Active Memory Distiller - auto-extracts preferences from LCM |
 | `qmd_scope_organizer.js` | QMD Scope auto-classifier with LLM-based inference |
 | `qmd_consistency_check.js` | QMD health check for logic consistency |
+| `reminisce_memory.js` | Memory query engine - LCM + QMD search with AI selection |
+| `auto_memory_extractor.js` | AI-driven memory extraction with deduplication |
+| `memory_hydration.js` | Session startup memory loader |
 
 ### Privacy & Security / 隱私安全工具
 
@@ -123,13 +126,16 @@ scripts/
 ├── memory_distiller_v2.js     # Memory extraction
 ├── qmd_scope_organizer.js     # Scope classifier
 ├── qmd_consistency_check.js  # Health check
-├── reminisce_engine.js       # Unified API
+├── reminisce_engine.js       # Unified API (templates + mood)
 ├── reminisce_templates.js    # Templates
 ├── emotional_matcher.js      # Mood matcher
 ├── anniversary_tracker.js     # Time capsule
 ├── reminisce_scheduler.js    # Trigger scheduler
 ├── state_snapshot_generator.js # State snapshot
-└── add_scope.js               # Scope migration
+├── add_scope.js               # Scope migration
+├── reminisce_memory.js        # Memory query (LCM + QMD)
+├── auto_memory_extractor.js   # AI memory extraction
+└── memory_hydration.js        # Startup memory loader
 ```
 
 ---
@@ -150,6 +156,11 @@ node --version  # v18+ recommended
 node memory_distiller_v2.js --hours=24 --dry-run
 node reminisce_engine.js --test
 node privacy_filter.js --check-qmd
+
+# New tools
+node reminisce_memory.js "還記得..." 48
+node auto_memory_extractor.js 24
+node memory_hydration.js --agent Tim
 ```
 
 ### Python Retriever Setup
@@ -170,5 +181,10 @@ Distributed under the MIT License. See LICENSE for more information.
 
 ---
 
-*最後更新：2026-03-31 v2.4*
-*Reminisce Engine + OpenClaw Workspace Tools*
+*最後更新：2026-04-03 v2.5*
+*Memory System v2 + OpenClaw Workspace Tools*
+
+## 📚 Documentation
+
+- [MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md) - Complete memory system guide
+- [memory-guidelines.md](docs/memory-guidelines.md) - What NOT to save rules
