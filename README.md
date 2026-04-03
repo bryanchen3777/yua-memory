@@ -84,9 +84,6 @@ This repo includes JavaScript tools for the [OpenClaw](https://github.com/opencl
 | `memory_distiller_v2.js` | Active Memory Distiller - auto-extracts preferences from LCM |
 | `qmd_scope_organizer.js` | QMD Scope auto-classifier with LLM-based inference |
 | `qmd_consistency_check.js` | QMD health check for logic consistency |
-| `reminisce_memory.js` | Memory query engine - LCM + QMD search with AI selection |
-| `auto_memory_extractor.js` | AI-driven memory extraction with deduplication |
-| `memory_hydration.js` | Session startup memory loader |
 
 ### Privacy & Security / 隱私安全工具
 
@@ -113,6 +110,17 @@ This repo includes JavaScript tools for the [OpenClaw](https://github.com/opencl
 | `state_snapshot_generator.js` | Yua emotional state snapshot generator |
 | `merge_lcm.js` | LCM SQLite database merge/restore |
 
+### Claude Code Enhancement / Claude Code 增強工具 ⭐
+
+| Tool | Description | Usage |
+|------|-------------|-------|
+| `session_memory.mjs` | Session Memory 10-chapter template | `--read/--write/--quick/--append` |
+| `dream_mode/dream_mode.mjs` | 4-phase memory consolidation (Orient→Gather→Consolidate→Prune) | Daily at 4 AM or manual |
+| `freshness.mjs` | Memory freshness checker (🟢<7d 🟡7-30d 🟠30-90d 🔴>90d) | `--check/--warn` |
+| `secret_scanner.mjs` | Secret detection (API keys, tokens, SSH, JWT, etc.) | `--check [--path <dir>]` |
+| `fork_agent.mjs` | Fork Agent pattern for sub-agents (5 turns, 10min timeout) | `--package/--status/--kill` |
+| `team_memory_api.mjs` | Team Memory REST API (port 3847, conflict detection) | `GET/POST/PUT/DELETE /memories` |
+
 ---
 
 ## 📂 Scripts Directory / 腳本目錄
@@ -126,16 +134,20 @@ scripts/
 ├── memory_distiller_v2.js     # Memory extraction
 ├── qmd_scope_organizer.js     # Scope classifier
 ├── qmd_consistency_check.js  # Health check
-├── reminisce_engine.js       # Unified API (templates + mood)
+├── reminisce_engine.js       # Unified API
 ├── reminisce_templates.js    # Templates
 ├── emotional_matcher.js      # Mood matcher
 ├── anniversary_tracker.js     # Time capsule
 ├── reminisce_scheduler.js    # Trigger scheduler
 ├── state_snapshot_generator.js # State snapshot
 ├── add_scope.js               # Scope migration
-├── reminisce_memory.js        # Memory query (LCM + QMD)
-├── auto_memory_extractor.js   # AI memory extraction
-└── memory_hydration.js        # Startup memory loader
+├── session_memory.mjs         # Session Memory template
+├── freshness.mjs              # Memory freshness checker
+├── secret_scanner.mjs         # Secret detection
+├── fork_agent.mjs            # Fork Agent pattern
+├── team_memory_api.mjs       # Team Memory REST API
+└── dream_mode/
+    └── dream_mode.mjs        # Dream Mode consolidation
 ```
 
 ---
@@ -156,11 +168,32 @@ node --version  # v18+ recommended
 node memory_distiller_v2.js --hours=24 --dry-run
 node reminisce_engine.js --test
 node privacy_filter.js --check-qmd
+```
 
-# New tools
-node reminisce_memory.js "還記得..." 48
-node auto_memory_extractor.js 24
-node memory_hydration.js --agent Tim
+### Claude Code Enhancement Tools Setup
+
+```bash
+# Session Memory - 10-chapter session template
+node session_memory.mjs --write "Current State" "Working on feature X"
+node session_memory.mjs --quick "Worklog" "14:00 - Completed task"
+node session_memory.mjs --read "Current State"
+
+# Dream Mode - 4-phase memory consolidation
+node dream_mode/dream_mode.mjs
+
+# Memory Freshness - Check memory age
+node freshness.mjs --check
+
+# Secret Scanner - Detect sensitive data
+node secret_scanner.mjs --check
+
+# Fork Agent - Spawn sub-agent with context
+node fork_agent.mjs --package "Review PR #123"
+node fork_agent.mjs --status
+
+# Team Memory API - REST API server
+node team_memory_api.mjs              # Default port 3847
+node team_memory_api.mjs --port 8080  # Custom port
 ```
 
 ### Python Retriever Setup
@@ -181,10 +214,5 @@ Distributed under the MIT License. See LICENSE for more information.
 
 ---
 
-*最後更新：2026-04-03 v2.5*
-*Memory System v2 + OpenClaw Workspace Tools*
-
-## 📚 Documentation
-
-- [MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md) - Complete memory system guide
-- [memory-guidelines.md](docs/memory-guidelines.md) - What NOT to save rules
+*最後更新：2026-04-03 v2.6*
+*Claude Code Enhancement Tools (Session Memory, Dream Mode, Freshness, Secret Scanner, Fork Agent, Team Memory API)*
