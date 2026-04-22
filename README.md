@@ -67,6 +67,16 @@ Multi-agent memory isolation with scope tags:
 
 Detects and resolves temporal or logical conflicts in memories to prevent hallucinations.
 
+### Ombre-Brain Integration (Optional) 🌊
+
+Emotional memory enrichment layer on top of the three-tier architecture. When configured, provides:
+- **Russell Circumplex emotion tagging** (valence: -1~1, arousal: 0~1)
+- **Dual-channel search** via Reciprocal Rank Fusion (TF-IDF + Ombre breath)
+- **Forgetting curve** (λ=0.06, ~21-day archival cycle)
+- **Emotional Resonance Score (ERS)** boost for high-arousal memories
+
+Ombre is off-by-default — Yua functions fully without it. See [`docs/ombre-integration.md`](docs/ombre-integration.md) for setup.
+
 ### Reminisce Engine / 回味引擎 ⭐
 
 Automatically triggers emotional memory sharing based on Bryan's mood and context.
@@ -214,5 +224,5 @@ Distributed under the MIT License. See LICENSE for more information.
 
 ---
 
-*最後更新：2026-04-03 v2.6*
+*最後更新：2026-04-22 v2.7*
 *Claude Code Enhancement Tools (Session Memory, Dream Mode, Freshness, Secret Scanner, Fork Agent, Team Memory API)*
