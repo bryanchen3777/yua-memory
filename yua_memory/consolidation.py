@@ -121,9 +121,9 @@ async def maybe_hold_memory(content: str, importance: int = 5) -> dict[str, Any]
     Returns:
         Ombre bucket result if successful, None if skipped or failed.
     """
-    try:
-        from ombre_bridge import OmbreUnavailable, get_ombre_bridge
+    from ombre_bridge import OmbreUnavailable, get_ombre_bridge
 
+    try:
         label = await llm_generate_emotion_label(content)
 
         if label.get("confidence", 0) < 0.4:
