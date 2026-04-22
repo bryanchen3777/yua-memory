@@ -70,6 +70,7 @@ class SyncReport:
     total_qmd: int = 0
     total_lcm: int = 0
     total_notebooklm: int = 0
+    total_ombre: int = 0
     in_sync: int = 0
     ghosts: int = 0
     orphans: int = 0
@@ -77,6 +78,9 @@ class SyncReport:
     conflicts: int = 0
     lcm_only: int = 0
     qmd_only: int = 0
+    ombre_unresolved: int = 0
+    ombre_weight_pool_active: int = 0
+    ombre_state: str = "unknown"
     errors: List[str] = field(default_factory=list)
     actions_taken: List[str] = field(default_factory=list)
 
@@ -394,14 +398,18 @@ class MemorySyncMonitor:
             report = self.auto_fix(report, qmd_entities, lcm_entities)
         else:
             print("[4/4] Skipping auto-fix (dry-run mode)")
-        
-        # 4. 記錄狀態
+
+        # 4. 檢查 Ombre-Brain 層
+        print("[5/5] Checking Ombre-Brain layer...")
+        report = self._check_ombre_status(report)
+
+        # 5. 記錄狀態
         self._save_sync_state(report)
         self._log_report(report)
-        
-        # 5. 打印摘要
+
+        # 6. 打印摘要
         self._print_report(report)
-        
+
         return report
 
     def _save_sync_state(self, report: SyncReport):
@@ -411,28 +419,32 @@ class MemorySyncMonitor:
             'in_sync': report.in_sync,
             'ghosts': report.ghosts,
             'orphans': report.orphans,
-            'conflicts': report.conflicts
+            'conflicts': report.conflicts,
+            'ombre_total': report.total_ombre,
+            'ombre_unresolved': report.ombre_unresolved,
+            'ombre_state': report.ombre_state
         }
-        
+
         with open(SYNC_STATE_FILE, 'w', encoding='utf-8') as f:
             json.dump(state, f, indent=2, ensure_ascii=False)
 
     def _log_report(self, report: SyncReport):
         """寫入同步日誌"""
         os.makedirs(os.path.dirname(SYNC_LOG_PATH), exist_ok=True)
-        
+
         with open(SYNC_LOG_PATH, 'a', encoding='utf-8') as f:
             f.write(f"\n=== Sync Report: {report.timestamp} ===\n")
-            f.write(f"QMD: {report.total_qmd} | LCM: {report.total_lcm}\n")
+            f.write(f"QMD: {report.total_qmd} | LCM: {report.total_lcm} | Ombre: {report.total_ombre}\n")
             f.write(f"In Sync: {report.in_sync}\n")
             f.write(f"Ghosts: {report.ghosts} | Orphans: {report.orphans}\n")
             f.write(f"Corrupted: {report.corrupted} | Conflicts: {report.conflicts}\n")
-            
+            f.write(f"Ombre State: {report.ombre_state} | Unresolved: {report.ombre_unresolved}\n")
+
             if report.errors:
                 f.write("\nErrors:\n")
                 for err in report.errors:
                     f.write(f"  - {err}\n")
-            
+
             if report.actions_taken:
                 f.write("\nActions:\n")
                 for action in report.actions_taken:
@@ -441,8 +453,8 @@ class MemorySyncMonitor:
     def _print_report(self, report: SyncReport):
         """打印同步報告"""
         print(f"\n=== Sync Report: {report.timestamp} ===")
-        print(f"QMD: {report.total_qmd} | LCM: {report.total_lcm} | In Sync: {report.in_sync}")
-        
+        print(f"QMD: {report.total_qmd} | LCM: {report.total_lcm} | Ombre: {report.total_ombre} | In Sync: {report.in_sync}")
+
         issues = report.ghosts + report.orphans + report.corrupted + report.conflicts
         if issues == 0:
             print("[OK] All layers in sync!")
@@ -456,12 +468,15 @@ class MemorySyncMonitor:
                 print(f"    - Corrupted files: {report.corrupted}")
             if report.conflicts:
                 print(f"    - Conflicts: {report.conflicts}")
-        
+
+        # Ombre status
+        print(f"Ombre: {report.ombre_state} | Unresolved: {report.ombre_unresolved} | Weight Pool: {report.ombre_weight_pool_active}")
+
         if report.errors:
             print("\nErrors:")
             for err in report.errors[:5]:  # 只顯示前5個
                 print(f"  ! {err}")
-        
+
         if report.actions_taken:
             print("\nActions Taken:")
             for action in report.actions_taken[:5]:
@@ -470,22 +485,102 @@ class MemorySyncMonitor:
     def get_sync_heartbeat(self) -> bool:
         """
         檢查是否需要執行同步心跳 (每24小時)
-        
+
         Returns: True if sync should run
         """
         if not os.path.exists(SYNC_STATE_FILE):
             return True
-        
+
         try:
             with open(SYNC_STATE_FILE, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            
+
             last_sync = datetime.fromisoformat(state.get('last_sync', '2000-01-01'))
             hours_since = (datetime.now() - last_sync).total_seconds() / 3600
-            
+
             return hours_since >= 24
         except:
             return True
+
+    @staticmethod
+    def _compute_ombre_health(report: SyncReport) -> str:
+        """
+        判定 Ombre-Brain 層健康狀態：
+        - active: 正常運行，有記憶，unresolved < 80%
+        - degraded: 有記憶但 unresolved > 80%
+        - unavailable: 無法連線或 error:*
+        """
+        if report.ombre_state == "unavailable" or \
+           str(report.ombre_state).startswith("error"):
+            return "unavailable"
+
+        total = report.total_ombre
+        unresolved = report.ombre_unresolved
+
+        if total == 0:
+            return "active"
+
+        unresolved_ratio = unresolved / total
+        if unresolved_ratio > 0.8:
+            return "degraded"
+
+        return "active"
+
+    def _check_ombre_status(self, report: SyncReport) -> SyncReport:
+        """
+        檢查 Ombre-Brain 層狀態。
+        透過 REST bridge 的 pulse 端點獲取狀態。
+        """
+        try:
+            from ombre_bridge import get_ombre_bridge, OmbreUnavailable
+            import asyncio
+            async def _pulse_ombre():
+                try:
+                    bridge = get_ombre_bridge()
+                    return await bridge.pulse()
+                except OmbreUnavailable:
+                    return None
+
+            # Run async pulse
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        pulse_result = pool.submit(asyncio.run, _pulse_ombre()).result()
+                else:
+                    pulse_result = asyncio.run(_pulse_ombre())
+            except Exception as e:
+                print(f"   [Ombre] Pulse failed: {e}")
+                pulse_result = None
+
+            if pulse_result and "error" not in pulse_result:
+                buckets = pulse_result.get("buckets", [])
+                report.total_ombre = len(buckets)
+                report.ombre_state = "active"
+
+                # Count unresolved memories
+                unresolved = [b for b in buckets if not b.get("resolved", False)]
+                report.ombre_unresolved = len(unresolved)
+
+                # Count weight pool active (high weight memories)
+                weight_pool = [b for b in buckets if b.get("weight", 0) > 0.5]
+                report.ombre_weight_pool_active = len(weight_pool)
+
+                # Compute health status
+                health = self._compute_ombre_health(report)
+                print(f"   Ombre: {report.total_ombre} buckets, {report.ombre_unresolved} unresolved, health={health}")
+            else:
+                report.ombre_state = "unavailable"
+                health = self._compute_ombre_health(report)
+                print(f"   Ombre: unavailable, health={health}")
+
+        except Exception as e:
+            report.ombre_state = f"error: {e}"
+            health = self._compute_ombre_health(report)
+            print(f"   [Ombre] Status check failed: {e}, health={health}")
+
+        return report
 
     def sync_notebooklm(self) -> Tuple[bool, str]:
         """
