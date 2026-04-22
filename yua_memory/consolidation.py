@@ -2,9 +2,11 @@ import os
 import re
 import sqlite3
 import yaml
+import asyncio
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Optional, Dict, Any
 from .path_manager import PathManager
 
 # 配置
@@ -12,6 +14,191 @@ WORKSPACE_DIR = str(PathManager().workspace())
 QMD_DIR = os.path.join(WORKSPACE_DIR, "qmd")
 DB_PATH = os.path.join(WORKSPACE_DIR, "config", "memory_vector_index.db")
 ARCHIVE_DIR = os.path.join(QMD_DIR, "archive")
+
+# Ombre-Brain Emotion Label Prompt
+EMOTION_LABEL_PROMPT = """
+分析以下記憶片段的情緒維度，回傳 JSON。
+
+記憶內容：
+{content}
+
+回傳格式（僅回傳 JSON，不要其他文字）：
+{{
+  "valence": <-1.0 到 +1.0，正值=正面情緒>,
+  "arousal": <0.0 到 1.0，高值=高激活>,
+  "quadrant": <"pleasant-active"|"pleasant-calm"|"unpleasant-active"|"unpleasant-calm">,
+  "confidence": <0.0 到 1.0，標籤信心度>
+}}
+"""
+
+
+def _validate_emotion_label(label: dict) -> dict:
+    """
+    驗證並規範化 LLM 回傳的情緒標籤。
+    永遠回傳有效 schema。
+    """
+    try:
+        valence = max(-1.0, min(1.0, float(label.get("valence", 0.0))))
+        arousal = max(0.0, min(1.0, float(label.get("arousal", 0.3))))
+        confidence = max(0.0, min(1.0, float(label.get("confidence", 0.0))))
+
+        quadrant = label.get("quadrant", "pleasant-calm")
+        valid_quadrants = ["pleasant-active", "pleasant-calm",
+                          "unpleasant-active", "unpleasant-calm"]
+        if quadrant not in valid_quadrants:
+            quadrant = "pleasant-calm"
+
+        return {
+            "valence": valence,
+            "arousal": arousal,
+            "quadrant": quadrant,
+            "confidence": confidence
+        }
+    except (ValueError, TypeError):
+        return {"valence": 0.0, "arousal": 0.3,
+                "quadrant": "pleasant-calm", "confidence": 0.0}
+
+
+async def llm_generate_emotion_label(content: str) -> Dict[str, Any]:
+    """
+    使用 LLM 生成情緒標籤（valence, arousal, quadrant, confidence）。
+    需要環境中有 LLM API 配置。
+    """
+    try:
+        import os
+        # Try to use OpenAI-compatible API via environment or config
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+
+        if not api_key:
+            return {"valence": 0.0, "arousal": 0.3, "quadrant": "pleasant-calm", "confidence": 0.0}
+
+        try:
+            import httpx
+            client = httpx.AsyncClient(timeout=30.0)
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [
+                        {"role": "system", "content": EMOTION_LABEL_PROMPT},
+                        {"role": "user", "content": content[:1000]}
+                    ],
+                    "max_tokens": 256,
+                    "temperature": 0.1
+                }
+            )
+            await client.aclose()
+
+            if response.status_code == 200:
+                result = response.json()
+                raw = result["choices"][0]["message"]["content"]
+                # Parse JSON from response
+                import json
+                # Handle markdown code blocks
+                cleaned = raw.strip()
+                if cleaned.startswith("```"):
+                    cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
+                parsed = json.loads(cleaned)
+                # 驗證並規範化
+                return _validate_emotion_label(parsed)
+        except Exception as e:
+            print(f"[Emotion Label Error] LLM call failed: {e}")
+
+    except Exception as e:
+        print(f"[Emotion Label Error] {e}")
+
+    return {"valence": 0.0, "arousal": 0.3, "quadrant": "pleasant-calm", "confidence": 0.0}
+
+
+async def maybe_hold_memory(content: str, importance: int = 5) -> Optional[Dict[str, Any]]:
+    """
+    嘗試將記憶寫入 Ombre-Brain。
+
+    如果 LLM 生成的 confidence < 0.4，表示情緒特徵不明顯，跳過寫入。
+
+    Returns:
+        Ombre bucket result if successful, None if skipped or failed.
+    """
+    try:
+        from ombre_bridge import get_ombre_bridge, OmbreUnavailable
+
+        label = await llm_generate_emotion_label(content)
+
+        if label.get("confidence", 0) < 0.4:
+            # 結構化 log：可 grep 的 key-value 格式
+            print(
+                f"[Ombre][skip_low_confidence] "
+                f"confidence={label.get('confidence', 0):.2f} "
+                f"valence={label.get('valence', 0):.2f} "
+                f"arousal={label.get('arousal', 0):.2f} "
+                f"content_preview={content[:50]!r}"
+            )
+            return None
+
+        bridge = get_ombre_bridge()
+        result = await bridge.hold(
+            content=content,
+            importance=importance,
+            valence=label.get("valence"),
+            arousal=label.get("arousal")
+        )
+        return result
+
+    except OmbreUnavailable:
+        # Ombre 不可用，跳過
+        return None
+    except Exception as e:
+        print(f"[maybe_hold_memory Error] {e}")
+        return None
+
+
+def get_ombre_frontmatter(valence: float, arousal: float, quadrant: str,
+                          weight: float = 1.0, resolved: bool = False) -> Dict[str, Any]:
+    """
+    生成 Ombre-Brain 情緒元資料的 frontmatter 字典。
+
+    Args:
+        valence: -1.0 到 +1.0
+        arousal: 0.0 到 1.0
+        quadrant: Russell 四象限標籤
+        weight: 衰減後的當前權重
+        resolved: 是否已解決
+
+    Returns:
+        Frontmatter 字典，包含 ombre_* 欄位
+    """
+    return {
+        "ombre_valence": round(valence, 2),
+        "ombre_arousal": round(arousal, 2),
+        "ombre_quadrant": quadrant,
+        "ombre_weight": round(weight, 3),
+        "ombre_resolved": resolved,
+        "ombre_tagged_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    }
+
+
+def enrich_qmd_frontmatter(frontmatter: Dict[str, Any],
+                           ombre_result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    將 Ombre-Brain 元資料加入 QMD frontmatter。
+
+    Args:
+        frontmatter: 現有的 frontmatter 字典
+        ombre_result: Ombre hold() 返回的結果（可選）
+
+    Returns:
+         enriched frontmatter 字典
+    """
+    if ombre_result:
+        frontmatter["ombre_valence"] = ombre_result.get("valence", 0.0)
+        frontmatter["ombre_arousal"] = ombre_result.get("arousal", 0.3)
+        frontmatter["ombre_quadrant"] = ombre_result.get("quadrant", "pleasant-calm")
+        frontmatter["ombre_weight"] = ombre_result.get("weight", 1.0)
+        frontmatter["ombre_resolved"] = False
+        frontmatter["ombre_tagged_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    return frontmatter
 
 class MemoryConsolidator:
     """
