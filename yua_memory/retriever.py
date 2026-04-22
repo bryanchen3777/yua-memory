@@ -4,9 +4,35 @@ import numpy as np
 import os
 import time
 from datetime import datetime
+from typing import List, Tuple, Optional
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from .path_manager import PathManager
+
+
+def rrf_merge(tfidf_results: List[Tuple[str, float]],
+              ombre_results: List[Tuple[str, float]],
+              k: int = 60) -> List[Tuple[str, float]]:
+    """
+    Reciprocal Rank Fusion for merging TF-IDF and Ombre-Brain breath results.
+
+    tfidf_results: [(doc_id, tfidf_score), ...] — doc_id is QMD file path
+    ombre_results: [(doc_id, breath_score), ...] — doc_id is Ombre bucket ID
+    Returns: [("qmd:path/to/file", score), ("ombre:bucket_id", score), ...]
+    """
+    scores: dict = {}
+
+    # QMD results get "qmd:" namespace prefix
+    for rank, (doc_id, _) in enumerate(tfidf_results):
+        key = f"qmd:{doc_id}"
+        scores[key] = scores.get(key, 0) + 1 / (k + rank + 1)
+
+    # Ombre results get "ombre:" namespace prefix
+    for rank, (doc_id, _) in enumerate(ombre_results):
+        key = f"ombre:{doc_id}"
+        scores[key] = scores.get(key, 0) + 1 / (k + rank + 1)
+
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
 # 配置資料庫路徑
 DB_PATH = str(PathManager().workspace() / "config" / "memory_vector_index.db")
@@ -78,9 +104,15 @@ class YuaMemoryRetriever:
                     continue
                 raise
 
-    def retrieve(self, query, top_n=5):
+    def retrieve(self, query, top_n=5, use_ombre_breath: bool = False):
         """
         核心檢索流程
+
+        Args:
+            query: Search query
+            top_n: Number of results to return
+            use_ombre_breath: If True, use Ombre-Brain breath for dual-channel search
+                             and merge with TF-IDF results via RRF
         """
         try:
             conn = self._get_connection()
@@ -194,6 +226,10 @@ class YuaMemoryRetriever:
             # #4 Circuit Breaker: 檢查是否有衝突
             self._check_conflicts(top_results)
 
+            # Ombre-Brain RRF merge for dual-channel search
+            if use_ombre_breath and self._is_emotion_related_query(query):
+                top_results = self._merge_with_ombre_breath_sync(query, top_results, top_n)
+
             return top_results
 
         except Exception as e:
@@ -257,6 +293,102 @@ class YuaMemoryRetriever:
         
         # If significant emotion/relationship keywords found, this is an emotion query
         return (pos_count + neg_count + rel_count) >= 1
+
+    async def _merge_with_ombre_breath_impl(self, query: str, tfidf_results: list, top_n: int) -> list:
+        """
+        純 async 實作：做 breath + RRF + 結果包裝。
+        只存在 async 邏輯，不處理 thread 或 event loop。
+        """
+        from ombre_bridge import get_ombre_bridge, OmbreUnavailable
+
+        bridge = get_ombre_bridge()
+        tfidf_ranked = [(r['id'], r.get('emotional_resonance_score', 0.0)) for r in tfidf_results]
+        id_to_result = {r['id']: r for r in tfidf_results}  # 用於複製
+
+        try:
+            ombre_raw = await bridge.breath(query, max_results=top_n * 2)
+            ombre_ranked = [(r.get('bucket_id') or r.get('id'), r.get('weight', 0.0)) for r in ombre_raw]
+        except OmbreUnavailable:
+            return tfidf_results
+
+        if not ombre_ranked:
+            return tfidf_results
+
+        merged = rrf_merge(tfidf_ranked, ombre_ranked, k=60)
+
+        enriched = []
+        for rank, (key, score) in enumerate(merged[:top_n]):
+            namespace, doc_id = key.split(":", 1)
+
+            if namespace == "qmd" and doc_id in id_to_result:
+                # 重要：copy object 避免污染原始 tfidf_results
+                result = dict(id_to_result[doc_id])
+                result['_source'] = 'tfidf'
+                result['_namespace'] = 'qmd'
+                result['_original_id'] = doc_id
+                result['_merge_score'] = score
+                result['_merge_rank'] = rank
+                enriched.append(result)
+
+            elif namespace == "ombre":
+                ombre_result = next((r for r in ombre_raw
+                                     if (r.get('bucket_id') or r.get('id')) == doc_id), None)
+                if ombre_result:
+                    enriched.append({
+                        'id': doc_id,
+                        'content': ombre_result.get('content', ''),
+                        'summary': ombre_result.get('content', '')[:100],
+                        'category': 'ombre',
+                        'tags': ombre_result.get('tags', []),
+                        '_source': 'ombre',
+                        '_namespace': 'ombre',
+                        '_original_id': doc_id,
+                        '_merge_score': score,
+                        '_merge_rank': rank,
+                        'ombre_valence': ombre_result.get('valence', 0.0),
+                        'ombre_arousal': ombre_result.get('arousal', 0.0),
+                        'ombre_quadrant': ombre_result.get('quadrant', 'unknown'),
+                        'ombre_weight': ombre_result.get('weight', 0.0),
+                    })
+
+        return enriched
+
+    def _merge_with_ombre_breath_sync(self, query: str, tfidf_results: list, top_n: int) -> list:
+        """
+        純 sync wrapper：thread + timeout(30s) + fallback。
+        不包含任何 async 邏輯。
+        """
+        import asyncio
+        import threading
+
+        result_box = {"result": tfidf_results, "error": None}
+
+        def _run():
+            try:
+                result_box["result"] = asyncio.run(
+                    self._merge_with_ombre_breath_impl(query, tfidf_results, top_n)
+                )
+            except Exception as e:
+                result_box["error"] = e
+
+        try:
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+            t.join(timeout=30)
+
+            if t.is_alive():
+                print("[Ombre][merge_timeout] thread_linger=true timeout=30s fallback=TF-IDF")
+                return tfidf_results
+
+            if result_box["error"] is not None:
+                print(f"[Ombre][merge_error] error={result_box['error']} fallback=TF-IDF")
+                return tfidf_results
+
+            return result_box["result"]
+
+        except Exception as e:
+            print(f"[Ombre][sync_wrapper_error] error={e} fallback=TF-IDF")
+            return tfidf_results
 
     def find_memory_ids_by_keywords(self, keywords: list, top_n: int = 10) -> list:
         """

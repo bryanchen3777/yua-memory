@@ -34,6 +34,7 @@ dependencies = [
     "numpy>=1.21.0",
     "scikit-learn>=1.0.0",
     "pyyaml>=6.0",
+    "httpx>=0.25.0",
     "requests>=2.28.0",
     "schedule>=1.1.0",
 ]
@@ -47,6 +48,11 @@ dev = [
 ]
 telegram = [
     "requests>=2.28.0",
+]
+ombre = [
+    "httpx>=0.25.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
 ]
 
 [project.urls]

@@ -1,10 +1,12 @@
 import os
 import re
 import sqlite3
-import yaml
 from datetime import datetime
 from difflib import SequenceMatcher
-from pathlib import Path
+from typing import Any
+
+import yaml
+
 from .path_manager import PathManager
 
 # 配置
@@ -12,6 +14,191 @@ WORKSPACE_DIR = str(PathManager().workspace())
 QMD_DIR = os.path.join(WORKSPACE_DIR, "qmd")
 DB_PATH = os.path.join(WORKSPACE_DIR, "config", "memory_vector_index.db")
 ARCHIVE_DIR = os.path.join(QMD_DIR, "archive")
+
+# Ombre-Brain Emotion Label Prompt
+EMOTION_LABEL_PROMPT = """
+分析以下記憶片段的情緒維度，回傳 JSON。
+
+記憶內容：
+{content}
+
+回傳格式（僅回傳 JSON，不要其他文字）：
+{{
+  "valence": <-1.0 到 +1.0，正值=正面情緒>,
+  "arousal": <0.0 到 1.0，高值=高激活>,
+  "quadrant": <"pleasant-active"|"pleasant-calm"|"unpleasant-active"|"unpleasant-calm">,
+  "confidence": <0.0 到 1.0，標籤信心度>
+}}
+"""
+
+
+def _validate_emotion_label(label: dict) -> dict:
+    """
+    驗證並規範化 LLM 回傳的情緒標籤。
+    永遠回傳有效 schema。
+    """
+    try:
+        valence = max(-1.0, min(1.0, float(label.get("valence", 0.0))))
+        arousal = max(0.0, min(1.0, float(label.get("arousal", 0.3))))
+        confidence = max(0.0, min(1.0, float(label.get("confidence", 0.0))))
+
+        quadrant = label.get("quadrant", "pleasant-calm")
+        valid_quadrants = ["pleasant-active", "pleasant-calm",
+                          "unpleasant-active", "unpleasant-calm"]
+        if quadrant not in valid_quadrants:
+            quadrant = "pleasant-calm"
+
+        return {
+            "valence": valence,
+            "arousal": arousal,
+            "quadrant": quadrant,
+            "confidence": confidence
+        }
+    except (ValueError, TypeError):
+        return {"valence": 0.0, "arousal": 0.3,
+                "quadrant": "pleasant-calm", "confidence": 0.0}
+
+
+async def llm_generate_emotion_label(content: str) -> dict[str, Any]:
+    """
+    使用 LLM 生成情緒標籤（valence, arousal, quadrant, confidence）。
+    需要環境中有 LLM API 配置。
+    """
+    try:
+        import os
+        # Try to use OpenAI-compatible API via environment or config
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+
+        if not api_key:
+            return {"valence": 0.0, "arousal": 0.3, "quadrant": "pleasant-calm", "confidence": 0.0}
+
+        try:
+            import httpx
+            client = httpx.AsyncClient(timeout=30.0)
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [
+                        {"role": "system", "content": EMOTION_LABEL_PROMPT},
+                        {"role": "user", "content": content[:1000]}
+                    ],
+                    "max_tokens": 256,
+                    "temperature": 0.1
+                }
+            )
+            await client.aclose()
+
+            if response.status_code == 200:
+                result = response.json()
+                raw = result["choices"][0]["message"]["content"]
+                # Parse JSON from response
+                import json
+                # Handle markdown code blocks
+                cleaned = raw.strip()
+                if cleaned.startswith("```"):
+                    cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
+                parsed = json.loads(cleaned)
+                # 驗證並規範化
+                return _validate_emotion_label(parsed)
+        except Exception as e:
+            print(f"[Emotion Label Error] LLM call failed: {e}")
+
+    except Exception as e:
+        print(f"[Emotion Label Error] {e}")
+
+    return {"valence": 0.0, "arousal": 0.3, "quadrant": "pleasant-calm", "confidence": 0.0}
+
+
+async def maybe_hold_memory(content: str, importance: int = 5) -> dict[str, Any] | None:
+    """
+    嘗試將記憶寫入 Ombre-Brain。
+
+    如果 LLM 生成的 confidence < 0.4，表示情緒特徵不明顯，跳過寫入。
+
+    Returns:
+        Ombre bucket result if successful, None if skipped or failed.
+    """
+    try:
+        from ombre_bridge import OmbreUnavailable, get_ombre_bridge
+
+        label = await llm_generate_emotion_label(content)
+
+        if label.get("confidence", 0) < 0.4:
+            # 結構化 log：可 grep 的 key-value 格式
+            print(
+                f"[Ombre][skip_low_confidence] "
+                f"confidence={label.get('confidence', 0):.2f} "
+                f"valence={label.get('valence', 0):.2f} "
+                f"arousal={label.get('arousal', 0):.2f} "
+                f"content_preview={content[:50]!r}"
+            )
+            return None
+
+        bridge = get_ombre_bridge()
+        result = await bridge.hold(
+            content=content,
+            importance=importance,
+            valence=label.get("valence"),
+            arousal=label.get("arousal")
+        )
+        return result
+
+    except OmbreUnavailable:
+        # Ombre 不可用，跳過
+        return None
+    except Exception as e:
+        print(f"[maybe_hold_memory Error] {e}")
+        return None
+
+
+def get_ombre_frontmatter(valence: float, arousal: float, quadrant: str,
+                          weight: float = 1.0, resolved: bool = False) -> dict[str, Any]:
+    """
+    生成 Ombre-Brain 情緒元資料的 frontmatter 字典。
+
+    Args:
+        valence: -1.0 到 +1.0
+        arousal: 0.0 到 1.0
+        quadrant: Russell 四象限標籤
+        weight: 衰減後的當前權重
+        resolved: 是否已解決
+
+    Returns:
+        Frontmatter 字典，包含 ombre_* 欄位
+    """
+    return {
+        "ombre_valence": round(valence, 2),
+        "ombre_arousal": round(arousal, 2),
+        "ombre_quadrant": quadrant,
+        "ombre_weight": round(weight, 3),
+        "ombre_resolved": resolved,
+        "ombre_tagged_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    }
+
+
+def enrich_qmd_frontmatter(frontmatter: dict[str, Any],
+                           ombre_result: dict[str, Any] | None = None) -> dict[str, Any]:
+    """
+    將 Ombre-Brain 元資料加入 QMD frontmatter。
+
+    Args:
+        frontmatter: 現有的 frontmatter 字典
+        ombre_result: Ombre hold() 返回的結果（可選）
+
+    Returns:
+         enriched frontmatter 字典
+    """
+    if ombre_result:
+        frontmatter["ombre_valence"] = ombre_result.get("valence", 0.0)
+        frontmatter["ombre_arousal"] = ombre_result.get("arousal", 0.3)
+        frontmatter["ombre_quadrant"] = ombre_result.get("quadrant", "pleasant-calm")
+        frontmatter["ombre_weight"] = ombre_result.get("weight", 1.0)
+        frontmatter["ombre_resolved"] = False
+        frontmatter["ombre_tagged_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    return frontmatter
 
 class MemoryConsolidator:
     """
@@ -32,7 +219,7 @@ class MemoryConsolidator:
     def __init__(self, db_path=DB_PATH):
         self.db_path = db_path
         self.consolidation_log = []
-        
+
     def _get_connection(self):
         conn = sqlite3.connect(self.db_path, timeout=10)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -63,14 +250,14 @@ class MemoryConsolidator:
         返回：list of orphaned entry dicts
         """
         orphaned = []
-        
+
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         try:
             cursor.execute("SELECT id, path, category FROM memory_blocks")
             entries = cursor.fetchall()
-            
+
             for entry_id, path, category in entries:
                 if path and not os.path.exists(path):
                     orphaned.append({
@@ -85,10 +272,10 @@ class MemoryConsolidator:
                         'entry_id': entry_id,
                         'path': path
                     })
-                    
+
         finally:
             conn.close()
-            
+
         return orphaned
 
     def check_unindexed_files(self):
@@ -98,29 +285,29 @@ class MemoryConsolidator:
         """
         unindexed = []
         indexed_paths = set()
-        
+
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         try:
             # 取得所有已索引的路徑
             cursor.execute("SELECT path FROM memory_blocks WHERE path IS NOT NULL")
             for row in cursor.fetchall():
                 if row[0]:
                     indexed_paths.add(row[0])
-            
+
             # 掃描 QMD 目錄
             for root, dirs, files in os.walk(QMD_DIR):
                 # 跳過 archive 目錄
                 if 'archive' in root:
                     continue
-                    
+
                 for file in files:
                     if not file.endswith('.md') or file == 'QMD_REPORT.md':
                         continue
-                        
+
                     file_path = os.path.join(root, file)
-                    
+
                     if file_path not in indexed_paths:
                         # 嘗試讀取 frontmatter
                         metadata = self._read_qmd_metadata(file_path)
@@ -136,18 +323,18 @@ class MemoryConsolidator:
                             'action': 'unindexed_detected',
                             'path': file_path
                         })
-                        
+
         finally:
             conn.close()
-            
+
         return unindexed
 
     def _read_qmd_metadata(self, file_path):
         """讀取 QMD 檔案的 frontmatter"""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding='utf-8') as f:
                 content = f.read()
-            
+
             match = re.match(r'^---\s*\n(.*?)\n---\s*\n(.*)', content, re.DOTALL)
             if match:
                 try:
@@ -158,7 +345,7 @@ class MemoryConsolidator:
                     pass
         except Exception as e:
             print(f"[Consolidation] Error reading {file_path}: {e}")
-            
+
         return {}
 
     def find_similar_memories(self, similarity_threshold=0.75):
@@ -173,10 +360,10 @@ class MemoryConsolidator:
         Returns: list of similar memory groups
         """
         similar_groups = []
-        
+
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         try:
             cursor.execute("""
                 SELECT id, category, content, tags, summary 
@@ -184,7 +371,7 @@ class MemoryConsolidator:
                 WHERE content IS NOT NULL AND content != ''
             """)
             entries = cursor.fetchall()
-            
+
             # 按 category 分組
             by_category = {}
             for entry in entries:
@@ -197,17 +384,17 @@ class MemoryConsolidator:
                     'tags': entry[3] or '',
                     'summary': entry[4] or ''
                 })
-            
+
             # 在同 category 內找相似記憶
             for category, items in by_category.items():
                 for i in range(len(items)):
                     for j in range(i + 1, len(items)):
                         item1 = items[i]
                         item2 = items[j]
-                        
+
                         # 計算相似度
                         similarity = self._calculate_similarity(item1, item2)
-                        
+
                         if similarity >= similarity_threshold:
                             similar_groups.append({
                                 'category': category,
@@ -222,10 +409,10 @@ class MemoryConsolidator:
                                 'memory2_id': item2['id'],
                                 'similarity': similarity
                             })
-                            
+
         finally:
             conn.close()
-            
+
         return similar_groups
 
     def _calculate_similarity(self, item1, item2):
@@ -240,32 +427,32 @@ class MemoryConsolidator:
         # 內容相似度
         content1 = (item1.get('content') or '').lower()
         content2 = (item2.get('content') or '').lower()
-        
+
         if content1 and content2:
             content_sim = SequenceMatcher(None, content1, content2).ratio()
         else:
             content_sim = 0.0
-            
+
         # 標籤重疊度
         tags1 = self._normalize_tags(item1.get('tags') or '')
         tags2 = self._normalize_tags(item2.get('tags') or '')
-        
+
         if tags1 and tags2:
             overlap = len(tags1 & tags2)
             union = len(tags1 | tags2)
             tag_sim = overlap / union if union > 0 else 0.0
         else:
             tag_sim = 0.0
-            
+
         # 摘要相似度
         summary1 = (item1.get('summary') or '').lower()
         summary2 = (item2.get('summary') or '').lower()
-        
+
         if summary1 and summary2:
             summary_sim = SequenceMatcher(None, summary1, summary2).ratio()
         else:
             summary_sim = 0.0
-        
+
         # 加權平均（內容為主）
         return (content_sim * 0.5) + (tag_sim * 0.3) + (summary_sim * 0.2)
 
@@ -283,7 +470,7 @@ class MemoryConsolidator:
         """
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         try:
             # 取得兩個記憶的詳細資訊
             cursor.execute("""
@@ -292,10 +479,10 @@ class MemoryConsolidator:
                 FROM memory_blocks WHERE id IN (?, ?)
             """, (memory_id1, memory_id2))
             rows = cursor.fetchall()
-            
+
             if len(rows) != 2:
                 return False, "One or both memories not found"
-            
+
             mem1 = {
                 'id': rows[0][0], 'path': rows[0][1],
                 'content': rows[0][2], 'tags': rows[0][3],
@@ -308,7 +495,7 @@ class MemoryConsolidator:
                 'summary': rows[1][4], 'last_accessed': rows[1][5],
                 'ers': rows[1][6] or 0.0
             }
-            
+
             # 比較時間，決定保留哪個
             if strategy == 'keep_newer':
                 newer = mem1 if mem1['last_accessed'] > mem2['last_accessed'] else mem2
@@ -319,24 +506,24 @@ class MemoryConsolidator:
             else:
                 newer = mem1
                 older = mem2
-            
+
             # 標記舊的為已合併（實際刪除或移動到archive）
             if older['path'] and os.path.exists(older['path']):
                 # 移動到 archive 目錄
                 archive_path = os.path.join(ARCHIVE_DIR, os.path.basename(older['path']))
                 os.makedirs(ARCHIVE_DIR, exist_ok=True)
-                
+
                 # 如果 archive 也有同名檔案，加時間戳
                 if os.path.exists(archive_path):
                     base, ext = os.path.splitext(archive_path)
                     archive_path = f"{base}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
-                
+
                 os.rename(older['path'], archive_path)
-            
+
             # 刪除舊的 DB 記錄
             cursor.execute("DELETE FROM memory_blocks WHERE id = ?", (older['id'],))
             conn.commit()
-            
+
             self.consolidation_log.append({
                 'timestamp': datetime.now().isoformat(),
                 'action': 'memories_merged',
@@ -344,9 +531,9 @@ class MemoryConsolidator:
                 'merged_id': older['id'],
                 'archive_path': archive_path if older['path'] else None
             })
-            
+
             return True, f"Merged {older['id']} into {newer['id']}"
-            
+
         except Exception as e:
             conn.rollback()
             return False, str(e)
@@ -361,19 +548,19 @@ class MemoryConsolidator:
         """
         indexed_count = 0
         errors = []
-        
+
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         try:
             for file_info in unindexed_files:
                 try:
                     file_path = file_info['path']
-                    
+
                     # 讀取內容
-                    with open(file_path, 'r', encoding='utf-8') as f:
+                    with open(file_path, encoding='utf-8') as f:
                         content = f.read()
-                    
+
                     match = re.match(r'^---\s*\n(.*?)\n---\s*\n(.*)', content, re.DOTALL)
                     if match:
                         try:
@@ -385,9 +572,9 @@ class MemoryConsolidator:
                     else:
                         metadata = {}
                         body = content
-                    
+
                     tags = ",".join(metadata.get('tags', [])) if isinstance(metadata.get('tags'), list) else (metadata.get('tags') or '')
-                    
+
                     cursor.execute("""
                         INSERT OR REPLACE INTO memory_blocks 
                         (id, path, category, content, tags, summary, priority, last_accessed)
@@ -402,22 +589,22 @@ class MemoryConsolidator:
                         metadata.get('priority', 'medium'),
                         metadata.get('last_accessed', datetime.now().isoformat())
                     ))
-                    
+
                     indexed_count += 1
                     self.consolidation_log.append({
                         'timestamp': datetime.now().isoformat(),
                         'action': 'file_indexed',
                         'path': file_path
                     })
-                    
+
                 except Exception as e:
                     errors.append({'file': file_info['path'], 'error': str(e)})
-                    
+
             conn.commit()
-            
+
         finally:
             conn.close()
-            
+
         return indexed_count, errors
 
     def remove_orphaned_entries(self, orphaned_entries, move_to_archive=True):
@@ -428,24 +615,24 @@ class MemoryConsolidator:
         """
         removed_count = 0
         errors = []
-        
+
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         try:
             for entry in orphaned_entries:
                 try:
                     entry_id = entry['id']
-                    
+
                     # 如果有路徑但檔案不存在，移動到 archive（如果選擇）
                     if entry.get('path') and move_to_archive:
                         archive_path = os.path.join(ARCHIVE_DIR, os.path.basename(entry['path']))
                         os.makedirs(ARCHIVE_DIR, exist_ok=True)
-                        
+
                         if os.path.exists(archive_path):
                             base, ext = os.path.splitext(archive_path)
                             archive_path = f"{base}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
-                        
+
                         # 創建一個 stub 檔案記錄曾經存在
                         try:
                             with open(archive_path, 'w', encoding='utf-8') as f:
@@ -465,25 +652,25 @@ Archived at: {datetime.now().isoformat()}
 """)
                         except:
                             pass
-                    
+
                     # 從 DB 刪除
                     cursor.execute("DELETE FROM memory_blocks WHERE id = ?", (entry_id,))
                     removed_count += 1
-                    
+
                     self.consolidation_log.append({
                         'timestamp': datetime.now().isoformat(),
                         'action': 'orphan_removed',
                         'entry_id': entry_id
                     })
-                    
+
                 except Exception as e:
                     errors.append({'entry': entry['id'], 'error': str(e)})
-                    
+
             conn.commit()
-            
+
         finally:
             conn.close()
-            
+
         return removed_count, errors
 
     def run_consolidation(self, dry_run=True, similarity_threshold=0.75):
@@ -501,37 +688,37 @@ Archived at: {datetime.now().isoformat()}
             'actions_taken': [],
             'errors': []
         }
-        
+
         print(f"[{datetime.now().isoformat()}] Starting Memory Consolidation (dry_run={dry_run})...")
-        
+
         # 1. 檢測孤立項目
         print("[1/4] Checking for orphaned entries...")
         orphaned = self.check_orphaned_entries()
         report['orphaned_entries'] = orphaned
         print(f"  Found {len(orphaned)} orphaned entries")
-        
+
         # 2. 檢測未索引檔案
         print("[2/4] Checking for unindexed files...")
         unindexed = self.check_unindexed_files()
         report['unindexed_files'] = unindexed
         print(f"  Found {len(unindexed)} unindexed files")
-        
+
         # 3. 檢測相似記憶
         print("[3/4] Checking for similar memories...")
         similar = self.find_similar_memories(similarity_threshold)
         report['similar_memories'] = similar
         print(f"  Found {len(similar)} similar memory groups")
-        
+
         # 4. 執行操作（如果非 dry_run）
         if not dry_run:
             print("[4/4] Executing consolidation actions...")
-            
+
             # 索引未索引的檔案
             if unindexed:
                 indexed, errors = self.index_unindexed_files(unindexed)
                 report['actions_taken'].append(f"Indexed {indexed} files")
                 report['errors'].extend(errors)
-            
+
             # 移除孤立項目
             if orphaned:
                 removed, errors = self.remove_orphaned_entries(orphaned)
@@ -539,15 +726,15 @@ Archived at: {datetime.now().isoformat()}
                 report['errors'].extend(errors)
         else:
             print("[4/4] Dry run - no changes made")
-            
-        print(f"\n[Consolidation Summary]")
+
+        print("\n[Consolidation Summary]")
         print(f"  Orphaned entries: {len(orphaned)}")
         print(f"  Unindexed files: {len(unindexed)}")
         print(f"  Similar memory groups: {len(similar)}")
-        
+
         if dry_run:
-            print(f"\n  Run with dry_run=False to execute changes")
-            
+            print("\n  Run with dry_run=False to execute changes")
+
         return report
 
     def get_consolidation_log(self):
@@ -556,18 +743,18 @@ Archived at: {datetime.now().isoformat()}
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='Memory Consolidation Layer')
     parser.add_argument('--execute', action='store_true', help='Execute changes (default is dry-run)')
     parser.add_argument('--threshold', type=float, default=0.75, help='Similarity threshold (0.0-1.0)')
     parser.add_argument('--merge', nargs=2, metavar=('ID1', 'ID2'), help='Merge two memories')
-    parser.add_argument('--strategy', choices=['keep_newer', 'keep_older', 'keep_both', 'merge_content'], 
+    parser.add_argument('--strategy', choices=['keep_newer', 'keep_older', 'keep_both', 'merge_content'],
                        default='keep_newer', help='Merge strategy')
-    
+
     args = parser.parse_args()
-    
+
     consolidator = MemoryConsolidator()
-    
+
     if args.merge:
         success, msg = consolidator.merge_memories(args.merge[0], args.merge[1], args.strategy)
         print(f"Merge result: {msg}")

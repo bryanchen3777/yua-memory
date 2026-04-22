@@ -2,9 +2,14 @@
 numpy>=1.21.0
 scikit-learn>=1.0.0
 pyyaml>=6.0
+httpx>=0.25.0
 
 # Optional: For enhanced notifications
 requests>=2.28.0
 
 # Optional: For schedule (scheduler.py)
 schedule>=1.1.0
+
+# Optional: For Ombre REST server (ombre_rest_server.py)
+fastapi>=0.104.0
+uvicorn>=0.24.0
