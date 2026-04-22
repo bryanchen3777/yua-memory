@@ -9,9 +9,9 @@ Handles:
 - Singleton instance for shared state
 """
 
-import httpx
 import asyncio
-from typing import Optional
+
+import httpx
 
 # Default Ombre-Brain MCP server URL
 DEFAULT_BASE_URL = "http://localhost:3848"
@@ -157,7 +157,7 @@ class OmbreBridge:
 
 
 # Singleton instance
-_bridge_instance: Optional[OmbreBridge] = None
+_bridge_instance: OmbreBridge | None = None
 
 
 def get_ombre_bridge() -> OmbreBridge:

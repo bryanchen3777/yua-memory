@@ -4,28 +4,27 @@ Ombre-Brain Configuration Loader
 Loads ombre_config.yaml and provides typed access to settings.
 """
 
-import os
-import yaml
 from pathlib import Path
-from typing import Optional
+
+import yaml
 
 # Default config path
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "ombre_config.yaml"
 
 
-def load_ombre_config(config_path: Optional[str] = None) -> dict:
+def load_ombre_config(config_path: str | None = None) -> dict:
     """Load Ombre-Brain configuration from YAML file."""
     path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
 
     if not path.exists():
         raise FileNotFoundError(f"Ombre config not found: {path}")
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 # Lazy-loaded config
-_config: Optional[dict] = None
+_config: dict | None = None
 
 
 def get_ombre_config() -> dict:
