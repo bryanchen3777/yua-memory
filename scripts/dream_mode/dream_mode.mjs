@@ -32,6 +32,60 @@ const MEMORY_DIR = path.join(WORKSPACE, 'memory');
 const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 const SESSION_COUNT_THRESHOLD = 5;
 
+// Ombre-Brain REST Bridge
+const OMBRE_REST_URL = 'http://localhost:3849';
+const MAX_ATTEMPTS = 3;  // 總共 3 次 attempt
+
+/**
+ * Call Ombre-Brain dream tool via REST bridge with retry
+ */
+async function callOmbreDream(depth = "medium") {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
+
+      const response = await fetch(
+        `${OMBRE_REST_URL}/api/ombre/dream?depth=${depth}`,
+        { signal: controller.signal }
+      );
+      clearTimeout(timeout);
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    } catch (e) {
+      if (attempt === MAX_ATTEMPTS) {
+        console.warn(`[Ombre][dream_failed] attempts=${MAX_ATTEMPTS} error=${e.message}`);
+        return null;
+      }
+      await new Promise(r => setTimeout(r, 1000)); // 1s backoff
+    }
+  }
+}
+
+/**
+ * Phase 3.5: Ombre Weight Pool - Get unresolved emotionally intense memories
+ */
+async function phaseOmbreWeightPool() {
+  console.log('\n🌊 PHASE 3.5: Ombre Weight Pool');
+  console.log('─'.repeat(40));
+
+  const ombre_result = await callOmbreDream("medium");
+  if (!ombre_result || !ombre_result.reflections) {
+    console.log('   ℹ️ No Ombre reflections available');
+    return [];
+  }
+
+  console.log(`   ✅ Retrieved ${ombre_result.reflections.length} Weight Pool memories`);
+
+  return ombre_result.reflections.map(r => ({
+    content: r.content,
+    valence: r.valence,
+    arousal: r.arousal,
+    source: 'ombre_weight_pool'
+  }));
+}
+
 /**
  * Lock mechanism with PID stale guard (from Claude Code)
  */
@@ -224,7 +278,11 @@ async function phaseConsolidate(orientState, memories) {
   } else {
     console.log('   ℹ️ No new insights to consolidate');
   }
-  
+
+  // Get Ombre Weight Pool memories (Phase 3.5)
+  const ombreMemories = await phaseOmbreWeightPool();
+  consolidated.ombreMemories = ombreMemories;
+
   return consolidated;
 }
 
